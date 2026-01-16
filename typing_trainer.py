@@ -137,30 +137,9 @@ def build_test_text(cfg: TestConfig) -> str:
     if words_file:
         words = load_words_from_file(words_file)
         chosen = [random.choice(words) for _ in range(cfg.words)]
-        return wrap_words(chosen, cfg.line_width)
+        return " ".join(chosen)
     raise ValueError("No words source available. Add files to ./files or provide --random-words-file.")
 
-
-def wrap_words(words: List[str], line_width: int) -> str:
-    lines: List[str] = []
-    current: List[str] = []
-    current_len = 0
-    for word in words:
-        word_len = len(word)
-        if current:
-            projected = current_len + 1 + word_len
-        else:
-            projected = word_len
-        if current and projected > line_width:
-            lines.append(" ".join(current))
-            current = [word]
-            current_len = word_len
-        else:
-            current.append(word)
-            current_len = projected
-    if current:
-        lines.append(" ".join(current))
-    return "\n".join(lines)
 
 
 def pick_words_file_from_dir() -> Optional[str]:
@@ -187,16 +166,20 @@ def render_text(
     state: TestState,
     cursor_style: str,
     show_whitespace: bool,
+    soft_wrap_width: Optional[int],
 ) -> None:
     stdscr.erase()
     height, width = stdscr.getmaxyx()
     y = 0
     x = 0
+    wrap_width = width
+    if soft_wrap_width is not None:
+        wrap_width = min(width, max(1, soft_wrap_width))
     def add_char(ch: str, attr: int) -> None:
         nonlocal x, y
         if y >= height:
             return
-        if x >= width:
+        if x >= wrap_width:
             y += 1
             x = 0
         if y >= height:
@@ -285,6 +268,7 @@ def run_test(
     target: str,
     cursor_style: str,
     show_whitespace: bool,
+    soft_wrap_width: Optional[int],
 ) -> TestResult:
     curses.curs_set(0)
     stdscr.nodelay(False)
@@ -304,7 +288,7 @@ def run_test(
         keypress_times=[],
     )
 
-    render_text(stdscr, state, cursor_style, show_whitespace)
+    render_text(stdscr, state, cursor_style, show_whitespace, soft_wrap_width)
 
     while state.pos < len(state.target):
         ch = stdscr.get_wch()
@@ -314,7 +298,7 @@ def run_test(
             if state.pos > 0:
                 state.pos -= 1
                 state.typed[state.pos] = None
-            render_text(stdscr, state, cursor_style, show_whitespace)
+            render_text(stdscr, state, cursor_style, show_whitespace, soft_wrap_width)
             continue
         if ch in ("\t", getattr(curses, "KEY_TAB", None)):
             if state.start_time is None:
@@ -332,7 +316,7 @@ def run_test(
             if mismatch:
                 state.mistakes += 1
             state.keypress_times.append(time.monotonic())
-            render_text(stdscr, state, cursor_style, show_whitespace)
+            render_text(stdscr, state, cursor_style, show_whitespace, soft_wrap_width)
             continue
         if ch in ("\n", "\r", curses.KEY_ENTER):
             ch = "\n"
@@ -347,7 +331,7 @@ def run_test(
                 state.mistakes += 1
             state.pos += 1
             state.keypress_times.append(time.monotonic())
-            render_text(stdscr, state, cursor_style, show_whitespace)
+            render_text(stdscr, state, cursor_style, show_whitespace, soft_wrap_width)
 
     state.end_time = time.monotonic() if state.start_time is not None else None
     elapsed = 0.0
@@ -409,9 +393,10 @@ def main() -> int:
     except (OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+    soft_wrap_width = None if cfg.text_file else cfg.line_width
 
     try:
-        result = curses.wrapper(run_test, target, cfg.cursor_style, cfg.show_whitespace)
+        result = curses.wrapper(run_test, target, cfg.cursor_style, cfg.show_whitespace, soft_wrap_width)
     except KeyboardInterrupt:
         return 1
 
