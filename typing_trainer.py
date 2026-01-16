@@ -174,44 +174,77 @@ def render_text(
     if soft_wrap_width is not None:
         wrap_width = min(width, max(1, soft_wrap_width))
 
-    def compute_scroll_state() -> tuple[int, int]:
+    word_wrap = soft_wrap_width is not None
+
+    def compute_layout() -> tuple[list[tuple[int, int]], int, int]:
+        positions: list[tuple[int, int]] = [(0, 0)] * len(state.target)
         line = 0
         col = 0
-        current_line = 0
-        for idx, ch in enumerate(state.target):
+        idx = 0
+        while idx < len(state.target):
+            ch = state.target[idx]
+            if ch == "\n":
+                positions[idx] = (line, col)
+                line += 1
+                col = 0
+                idx += 1
+                continue
+            if word_wrap:
+                if ch == " ":
+                    positions[idx] = (line, col)
+                    col += 1
+                    if col >= wrap_width:
+                        line += 1
+                        col = 0
+                    idx += 1
+                    continue
+                end = idx
+                while end < len(state.target) and state.target[end] not in (" ", "\n"):
+                    end += 1
+                word_len = end - idx
+                if col > 0 and col + word_len > wrap_width:
+                    line += 1
+                    col = 0
+                for pos in range(idx, end):
+                    positions[pos] = (line, col)
+                    col += 1
+                idx = end
+                continue
+            positions[idx] = (line, col)
+            col += 1
             if col >= wrap_width:
                 line += 1
                 col = 0
-            if idx == state.pos:
-                current_line = line
-            if ch == "\n":
-                line += 1
-                col = 0
-            else:
-                col += 1
-        if state.pos >= len(state.target):
-            current_line = line
-        total_lines = line + 1
+            idx += 1
+        if col >= wrap_width:
+            line += 1
+            col = 0
+        return positions, line, col
+
+    positions, end_line, end_col = compute_layout()
+
+    def compute_scroll_state() -> tuple[int, int]:
+        if state.pos < len(state.target):
+            current_line = positions[state.pos][0]
+        else:
+            current_line = end_line
+        max_line = end_line
+        for line, _ in positions:
+            if line > max_line:
+                max_line = line
+        total_lines = max_line + 1
         return current_line, total_lines
 
     current_line, total_lines = compute_scroll_state()
     max_top = max(0, total_lines - height)
     top_line = clamp(current_line - (height // 2), 0, max_top)
 
-    line = 0
-    col = 0
-
-    def add_char(ch: str, attr: int) -> None:
-        nonlocal line, col
-        if col >= wrap_width:
-            line += 1
-            col = 0
+    def add_char_at(line: int, col: int, ch: str, attr: int) -> None:
         if top_line <= line < top_line + height:
             try:
                 stdscr.addch(line - top_line, col, ch, attr)
             except curses.error:
                 pass
-        col += 1
 
     for idx, ch in enumerate(state.target):
         display_ch = ch
@@ -224,6 +257,8 @@ def render_text(
                 display_ch = "↵"
         elif ch == "\t":
             display_ch = " "
+
+        line, col = positions[idx]
 
         if ch == "\n":
             if show_whitespace:
@@ -240,25 +275,22 @@ def render_text(
                     elif cursor_style == "underline":
                         attr = attr | curses.A_UNDERLINE
                 if idx == state.pos and cursor_style == "bar":
-                    add_char("|", curses.A_BOLD)
-                add_char(display_ch, attr)
+                    add_char_at(line, col, "|", curses.A_BOLD)
+                else:
+                    add_char_at(line, col, display_ch, attr)
             else:
                 if idx < state.pos:
                     typed_ch = state.typed[idx]
                     if typed_ch != ch:
-                        add_char("^", curses.color_pair(1) | curses.A_BOLD)
+                        add_char_at(line, col, "^", curses.color_pair(1) | curses.A_BOLD)
                 elif idx == state.pos:
                     if cursor_style == "bar":
-                        add_char("|", curses.A_BOLD)
+                        add_char_at(line, col, "|", curses.A_BOLD)
                     elif cursor_style == "highlight":
-                        add_char(" ", curses.A_REVERSE)
+                        add_char_at(line, col, " ", curses.A_REVERSE)
                     elif cursor_style == "underline":
-                        add_char(" ", curses.A_UNDERLINE)
-            line += 1
-            col = 0
+                        add_char_at(line, col, " ", curses.A_UNDERLINE)
             continue
-        if line >= top_line + height:
-            break
 
         attr = curses.A_DIM
         if idx < state.pos:
@@ -276,12 +308,12 @@ def render_text(
                 attr = attr | curses.A_UNDERLINE
 
         if idx == state.pos and cursor_style == "bar":
-            add_char("|", curses.A_BOLD)
-
-        add_char(display_ch, attr)
+            add_char_at(line, col, "|", curses.A_BOLD)
+        else:
+            add_char_at(line, col, display_ch, attr)
 
     if state.pos >= len(state.target) and cursor_style == "bar":
-        add_char("|", curses.A_BOLD)
+        add_char_at(end_line, end_col, "|", curses.A_BOLD)
 
     stdscr.refresh()
 
