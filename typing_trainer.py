@@ -170,25 +170,48 @@ def render_text(
 ) -> None:
     stdscr.erase()
     height, width = stdscr.getmaxyx()
-    y = 0
-    x = 0
     wrap_width = width
     if soft_wrap_width is not None:
         wrap_width = min(width, max(1, soft_wrap_width))
+
+    def compute_scroll_state() -> tuple[int, int]:
+        line = 0
+        col = 0
+        current_line = 0
+        for idx, ch in enumerate(state.target):
+            if col >= wrap_width:
+                line += 1
+                col = 0
+            if idx == state.pos:
+                current_line = line
+            if ch == "\n":
+                line += 1
+                col = 0
+            else:
+                col += 1
+        if state.pos >= len(state.target):
+            current_line = line
+        total_lines = line + 1
+        return current_line, total_lines
+
+    current_line, total_lines = compute_scroll_state()
+    max_top = max(0, total_lines - height)
+    top_line = clamp(current_line - (height // 2), 0, max_top)
+
+    line = 0
+    col = 0
+
     def add_char(ch: str, attr: int) -> None:
-        nonlocal x, y
-        if y >= height:
-            return
-        if x >= wrap_width:
-            y += 1
-            x = 0
-        if y >= height:
-            return
-        try:
-            stdscr.addch(y, x, ch, attr)
-        except curses.error:
-            pass
-        x += 1
+        nonlocal line, col
+        if col >= wrap_width:
+            line += 1
+            col = 0
+        if top_line <= line < top_line + height:
+            try:
+                stdscr.addch(line - top_line, col, ch, attr)
+            except curses.error:
+                pass
+        col += 1
 
     for idx, ch in enumerate(state.target):
         display_ch = ch
@@ -231,10 +254,10 @@ def render_text(
                         add_char(" ", curses.A_REVERSE)
                     elif cursor_style == "underline":
                         add_char(" ", curses.A_UNDERLINE)
-            y += 1
-            x = 0
+            line += 1
+            col = 0
             continue
-        if y >= height:
+        if line >= top_line + height:
             break
 
         attr = curses.A_DIM
