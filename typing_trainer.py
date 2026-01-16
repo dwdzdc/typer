@@ -16,6 +16,7 @@ class TestConfig:
     random_words_file: Optional[str]
     line_width: int
     cursor_style: str
+    show_whitespace: bool
 
 
 @dataclass
@@ -51,6 +52,13 @@ def parse_args() -> TestConfig:
             "  If no file is provided, a random file from ./files is used\n"
             "  as the random-words source\n"
             "\n"
+            "Whitespace visibility:\n"
+            "  Use --show-whitespace to display symbols for space/tab/newline\n"
+            "\n"
+            "Tabs:\n"
+            "  Tabs in text files are converted to four spaces\n"
+            "  Pressing Tab types four spaces but counts as one keystroke\n"
+            "\n"
             "Results:\n"
             "  WPM: words per minute (5 chars = 1 word, correct chars only)\n"
             "  CPM: characters per minute (correct chars only)\n"
@@ -81,6 +89,11 @@ def parse_args() -> TestConfig:
         default="underline",
         help="Cursor style: bar, highlight, or underline (default: underline).",
     )
+    parser.add_argument(
+        "--show-whitespace",
+        action="store_true",
+        help="Show visible symbols for spaces/tabs/newlines.",
+    )
     args = parser.parse_args()
 
     if args.words <= 0:
@@ -96,6 +109,7 @@ def parse_args() -> TestConfig:
         random_words_file=args.random_words_file,
         line_width=args.line_width,
         cursor_style=args.cursor_style,
+        show_whitespace=args.show_whitespace,
     )
 
 
@@ -113,7 +127,7 @@ def load_full_text(path: str) -> str:
         content = f.read()
     if not content.strip():
         raise ValueError("Text file is empty")
-    return content
+    return content.replace("\t", "    ")
 
 
 def build_test_text(cfg: TestConfig) -> str:
@@ -168,7 +182,12 @@ def clamp(n: int, min_n: int, max_n: int) -> int:
     return max(min_n, min(max_n, n))
 
 
-def render_text(stdscr: curses.window, state: TestState, cursor_style: str) -> None:
+def render_text(
+    stdscr: curses.window,
+    state: TestState,
+    cursor_style: str,
+    show_whitespace: bool,
+) -> None:
     stdscr.erase()
     height, width = stdscr.getmaxyx()
     y = 0
@@ -189,18 +208,46 @@ def render_text(stdscr: curses.window, state: TestState, cursor_style: str) -> N
         x += 1
 
     for idx, ch in enumerate(state.target):
+        display_ch = ch
+        if show_whitespace:
+            if ch == " ":
+                display_ch = "·"
+            elif ch == "\t":
+                display_ch = "→"
+            elif ch == "\n":
+                display_ch = "↵"
+        elif ch == "\t":
+            display_ch = " "
+
         if ch == "\n":
-            if idx < state.pos:
-                typed_ch = state.typed[idx]
-                if typed_ch != ch:
-                    add_char("^", curses.color_pair(1) | curses.A_BOLD)
-            elif idx == state.pos:
-                if cursor_style == "bar":
+            if show_whitespace:
+                attr = curses.A_DIM
+                if idx < state.pos:
+                    typed_ch = state.typed[idx]
+                    if typed_ch == ch:
+                        attr = curses.A_BOLD
+                    else:
+                        attr = curses.color_pair(1) | curses.A_BOLD
+                elif idx == state.pos:
+                    if cursor_style == "highlight":
+                        attr = attr | curses.A_REVERSE
+                    elif cursor_style == "underline":
+                        attr = attr | curses.A_UNDERLINE
+                if idx == state.pos and cursor_style == "bar":
                     add_char("|", curses.A_BOLD)
-                elif cursor_style == "highlight":
-                    add_char(" ", curses.A_REVERSE)
-                elif cursor_style == "underline":
-                    add_char(" ", curses.A_UNDERLINE)
+                add_char(display_ch, attr)
+            else:
+                if idx < state.pos:
+                    typed_ch = state.typed[idx]
+                    if typed_ch != ch:
+                        add_char("^", curses.color_pair(1) | curses.A_BOLD)
+                elif idx == state.pos:
+                    if cursor_style == "bar":
+                        add_char("|", curses.A_BOLD)
+                    elif cursor_style == "highlight":
+                        add_char(" ", curses.A_REVERSE)
+                    elif cursor_style == "underline":
+                        add_char(" ", curses.A_UNDERLINE)
             y += 1
             x = 0
             continue
@@ -208,14 +255,13 @@ def render_text(stdscr: curses.window, state: TestState, cursor_style: str) -> N
             break
 
         attr = curses.A_DIM
-        display_ch = ch
         if idx < state.pos:
             typed_ch = state.typed[idx]
             if typed_ch == ch:
                 attr = curses.A_BOLD
             else:
                 attr = curses.color_pair(1) | curses.A_BOLD
-                if ch.isspace():
+                if ch.isspace() and not show_whitespace:
                     display_ch = "."
         elif idx == state.pos:
             if cursor_style == "highlight":
@@ -234,7 +280,12 @@ def render_text(stdscr: curses.window, state: TestState, cursor_style: str) -> N
     stdscr.refresh()
 
 
-def run_test(stdscr: curses.window, target: str, cursor_style: str) -> TestResult:
+def run_test(
+    stdscr: curses.window,
+    target: str,
+    cursor_style: str,
+    show_whitespace: bool,
+) -> TestResult:
     curses.curs_set(0)
     stdscr.nodelay(False)
     stdscr.keypad(True)
@@ -253,7 +304,7 @@ def run_test(stdscr: curses.window, target: str, cursor_style: str) -> TestResul
         keypress_times=[],
     )
 
-    render_text(stdscr, state, cursor_style)
+    render_text(stdscr, state, cursor_style, show_whitespace)
 
     while state.pos < len(state.target):
         ch = stdscr.get_wch()
@@ -263,7 +314,25 @@ def run_test(stdscr: curses.window, target: str, cursor_style: str) -> TestResul
             if state.pos > 0:
                 state.pos -= 1
                 state.typed[state.pos] = None
-            render_text(stdscr, state, cursor_style)
+            render_text(stdscr, state, cursor_style, show_whitespace)
+            continue
+        if ch in ("\t", getattr(curses, "KEY_TAB", None)):
+            if state.start_time is None:
+                state.start_time = time.monotonic()
+            mismatch = False
+            for _ in range(4):
+                if state.pos >= len(state.target):
+                    break
+                if state.target[state.pos] == " ":
+                    state.typed[state.pos] = " "
+                else:
+                    state.typed[state.pos] = "\t"
+                    mismatch = True
+                state.pos += 1
+            if mismatch:
+                state.mistakes += 1
+            state.keypress_times.append(time.monotonic())
+            render_text(stdscr, state, cursor_style, show_whitespace)
             continue
         if ch in ("\n", "\r", curses.KEY_ENTER):
             ch = "\n"
@@ -278,7 +347,7 @@ def run_test(stdscr: curses.window, target: str, cursor_style: str) -> TestResul
                 state.mistakes += 1
             state.pos += 1
             state.keypress_times.append(time.monotonic())
-            render_text(stdscr, state, cursor_style)
+            render_text(stdscr, state, cursor_style, show_whitespace)
 
     state.end_time = time.monotonic() if state.start_time is not None else None
     elapsed = 0.0
@@ -341,7 +410,7 @@ def main() -> int:
         return 1
 
     try:
-        result = curses.wrapper(run_test, target, cfg.cursor_style)
+        result = curses.wrapper(run_test, target, cfg.cursor_style, cfg.show_whitespace)
     except KeyboardInterrupt:
         return 1
 
