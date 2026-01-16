@@ -63,7 +63,7 @@ def parse_args() -> TestConfig:
             "  WPM: words per minute (5 chars = 1 word, correct chars only)\n"
             "  CPM: characters per minute (correct chars only)\n"
             "  Mistakes: total incorrect keystrokes (includes corrected)\n"
-            "  Stability: 0-100 based on typing rhythm consistency\n"
+            "  Stability: 0-100 based on average deviation from ideal rhythm\n"
             "    100 = perfectly even intervals (metronome-like)\n"
             "      0 = very uneven intervals (high variability)\n"
         ),
@@ -376,14 +376,15 @@ def compute_stability(times: List[float]) -> float:
     intervals = [b - a for a, b in zip(times, times[1:]) if b - a > 0]
     if len(intervals) < 2:
         return 100.0
-    mean = sum(intervals) / len(intervals)
-    if mean <= 0:
+    total_time = sum(intervals)
+    if total_time <= 0:
         return 0.0
-    variance = sum((x - mean) ** 2 for x in intervals) / len(intervals)
-    std = variance ** 0.5
-    cv = std / mean
-    stability = 100.0 * (1.0 - cv)
-    return max(0.0, min(100.0, stability))
+    ideal = total_time / len(intervals)
+    if ideal <= 0:
+        return 0.0
+    mean_abs_dev = sum(abs(x - ideal) for x in intervals) / len(intervals)
+    score = 100.0 * (1.0 - (mean_abs_dev / ideal))
+    return max(0.0, min(100.0, score))
 
 
 def format_results(result: TestResult) -> str:
